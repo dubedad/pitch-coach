@@ -17,6 +17,7 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const PORT = parseInt(process.env.PORT || '3200', 10);
 const MODEL = 'claude-sonnet-5';
@@ -145,7 +146,7 @@ function callClaude(system, deck) {
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
         'content-length': Buffer.byteLength(payload),
-      }, timeout: 120000,
+      }, timeout: 240000,
     }, (res) => {
       let body = '';
       res.on('data', (d) => { body += d; });
@@ -219,6 +220,77 @@ function score(raw) {
   };
 }
 
+// --- .pptx text extraction (dependency-free; a .pptx is a ZIP) ---------------
+// Walk the ZIP central directory and return { name: Buffer } for wanted entries.
+// Uses the central-directory sizes (reliable even when local headers use a data
+// descriptor), then reads each local header only to find where the data begins.
+function unzipEntries(buf, wantName) {
+  const EOCD_SIG = 0x06054b50, CEN_SIG = 0x02014b50, LOC_SIG = 0x04034b50;
+  let eocd = -1;
+  const minEocd = Math.max(0, buf.length - 22 - 65536);
+  for (let i = buf.length - 22; i >= minEocd; i--) {
+    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break; }
+  }
+  if (eocd === -1) throw new Error('no EOCD (not a zip)');
+  const cdCount = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const entries = {};
+  for (let i = 0; i < cdCount && p + 46 <= buf.length; i++) {
+    if (buf.readUInt32LE(p) !== CEN_SIG) break;
+    const method = buf.readUInt16LE(p + 10);
+    const compSize = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const localOff = buf.readUInt32LE(p + 42);
+    const name = buf.slice(p + 46, p + 46 + nameLen).toString('utf8');
+    if (wantName(name) && buf.readUInt32LE(localOff) === LOC_SIG) {
+      const lNameLen = buf.readUInt16LE(localOff + 26);
+      const lExtraLen = buf.readUInt16LE(localOff + 28);
+      const dataStart = localOff + 30 + lNameLen + lExtraLen;
+      const comp = buf.slice(dataStart, dataStart + compSize);
+      if (method === 0) entries[name] = comp;
+      else if (method === 8) entries[name] = zlib.inflateRawSync(comp);
+      else throw new Error('unsupported zip method ' + method);
+    }
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+function decodeXmlEntities(s) {
+  return s
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&amp;/g, '&'); // amp last, so we don't double-decode
+}
+
+// Mirror of critique.php extract_pptx: slides in order, <a:t> runs joined,
+// </a:p> as line breaks, one "Slide N:" block per slide.
+function extractPptx(buf) {
+  let entries;
+  try { entries = unzipEntries(buf, (n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)); }
+  catch (e) { throw { code: 400, msg: 'Could not read the file — is it a valid .pptx?' }; }
+  const names = Object.keys(entries).sort(
+    (a, b) => parseInt(a.match(/slide(\d+)\.xml/)[1], 10) - parseInt(b.match(/slide(\d+)\.xml/)[1], 10));
+  if (!names.length) throw { code: 400, msg: 'No slides found — is this an empty or non-PowerPoint file?' };
+  const out = [];
+  let n = 0;
+  for (const name of names) {
+    n++;
+    const xml = entries[name].toString('utf8').split('</a:p>').join('\n');
+    const runs = [];
+    const re = /<a:t>([\s\S]*?)<\/a:t>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) runs.push(m[1]);
+    const text = decodeXmlEntities(runs.join(' ')).replace(/[ \t]+\n/g, '\n').trim();
+    out.push(`Slide ${n}:\n` + (text !== '' ? text : '(no text on this slide)'));
+  }
+  return out.join('\n\n');
+}
+
 // Minimal multipart/form-data parser: pulls text fields and detects a file field.
 function parseMultipart(buf, boundary) {
   const fields = {}; const files = {};
@@ -254,7 +326,7 @@ const server = http.createServer((req, res) => {
 
   const chunks = [];
   let size = 0;
-  req.on('data', (c) => { chunks.push(c); size += c.length; if (size > 8e6) req.destroy(); });
+  req.on('data', (c) => { chunks.push(c); size += c.length; if (size > 30e6) req.destroy(); });
   req.on('end', async () => {
     try {
       const buf = Buffer.concat(chunks);
@@ -264,9 +336,14 @@ const server = http.createServer((req, res) => {
       if (ct.includes('multipart/form-data') && bM) {
         const { fields, files } = parseMultipart(buf, bM[1].replace(/^"|"$/g, ''));
         if (files.deck && files.deck.data && files.deck.data.length) {
-          return send(400, { error: 'PowerPoint upload is being wired up — for now paste your deck text and try again.' });
+          try { deck = extractPptx(files.deck.data).trim(); }
+          catch (e) {
+            if (e && e.code) return send(e.code, { error: e.msg });
+            return send(400, { error: 'Could not read that .pptx — try re-saving it, or paste the deck text.' });
+          }
+        } else {
+          deck = (fields.text || '').trim();
         }
-        deck = (fields.text || '').trim();
       } else if (ct.includes('application/json')) {
         try { deck = (JSON.parse(buf.toString('utf8')).text || '').trim(); } catch {}
       } else {
@@ -290,6 +367,13 @@ const server = http.createServer((req, res) => {
     }
   });
 });
+
+// Offline diagnostic: `node critique-server.js --extract deck.pptx` prints the
+// extracted deck text and exits (no model call). Used to verify extraction.
+if (process.argv[2] === '--extract') {
+  try { process.stdout.write(extractPptx(fs.readFileSync(process.argv[3])) + '\n'); process.exit(0); }
+  catch (e) { process.stderr.write('extract failed: ' + (e && e.msg ? e.msg : e) + '\n'); process.exit(1); }
+}
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`pitch-coach critique server on 127.0.0.1:${PORT}, editor=${EDITOR_DIR}, key=${anthropicKey() ? 'set' : 'MISSING'}`);
