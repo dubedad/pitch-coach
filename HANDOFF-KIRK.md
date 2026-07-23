@@ -22,16 +22,21 @@ supports.
 
 ## OPTION A — Static + PHP  ✅ recommended for Hostinger shared hosting
 
-Folder: [`web-static/`](web-static/) — a plain `index.html` (dumb renderer) + a single
-`critique.php` endpoint that holds the API key server-side, extracts the `.pptx`,
-assembles the prompt from `editor/`, calls Claude, scores it, returns JSON. No Node.
+Folder: [`web-static/`](web-static/) — a plain `index.html` (three tabs: Cold read,
+Coach, Goals) + two endpoints that hold the API key server-side:
+- `critique.php` — extracts the `.pptx`, assembles the prompt from `editor/`, calls
+  Claude, scores it, returns JSON (the Cold-read tab).
+- `coach.php` — a warm tutor chat that reads `editor/` + `wiki/` and the user's OKR
+  state; also drafts candidate `wiki/` lessons for human review (the Coach tab).
+No Node. The Goals (OKR) tab is client-side only (browser localStorage, no login).
 
 ### Server requirements
 - PHP 8+ with **`ZipArchive`** (pptx unzip) and **`curl`** (both standard on Hostinger).
 - Outbound HTTPS to `api.anthropic.com` allowed.
 
 ### Deploy steps
-1. **Bundle the editor beside the endpoint** (critique.php reads `./editor`):
+1. **Bundle the editor beside the endpoints** (both `.php` read `./editor`; `coach.php`
+   also reads `./wiki`, which already ships in `web-static/`):
    ```bash
    cd /Users/robdube/dev/pitch-coach
    rm -rf web-static/editor && cp -R editor web-static/editor
@@ -41,18 +46,25 @@ assembles the prompt from `editor/`, calls Claude, scores it, returns JSON. No N
    ```
    <docroot>/pitch-coach/index.html
    <docroot>/pitch-coach/critique.php
+   <docroot>/pitch-coach/coach.php
+   <docroot>/pitch-coach/wiki/…              (coach lessons; grows over time)
    <docroot>/pitch-coach/editor/…            (the copied bundle)
    ```
 3. **Set the API key server-side** — pick one, never commit it:
    - `.htaccess` in the same folder: `SetEnv ANTHROPIC_API_KEY sk-ant-…`, **or**
    - a file **outside** the web root at `../.secrets/anthropic_key` containing just the key.
-4. Visit `https://aiguys.tech/pitch-coach/` → paste a deck or upload a `.pptx` →
-   "Get the cold read".
+4. Visit `https://aiguys.tech/pitch-coach/` → **Cold read** (paste/upload a deck),
+   **Coach** (chat), **Goals** (set OKR targets).
 
 ### Notes
-- Model is set in `critique.php` (`MODEL` const). Swap providers by reimplementing
-  `call_claude()` only.
-- Decks are processed in-session; nothing is persisted.
+- Model is set in both `critique.php` and `coach.php` (`MODEL` const). Swap providers
+  by reimplementing `call_claude()` in each.
+- Decks and chats are processed in-session; nothing is persisted server-side. OKR
+  targets live in the visitor's browser localStorage.
+- **Wiki growth (draft → review → publish):** the Coach tab's "Save a lesson" button
+  calls `coach.php` (action=propose) and shows a candidate markdown lesson. It is NOT
+  auto-saved. To publish, drop it in as a new `wiki/<name>.md` and redeploy — the next
+  chat reads it automatically. See `web-static/wiki/README.md`.
 
 ---
 
@@ -91,6 +103,8 @@ it must be injected server-side by whoever runs the deploy (env var or the
 `.secrets` file above). Do not route the key through chat.
 
 ## Open follow-ups (not blocking launch)
-- OKR-overlay mode and Coach/tutor mode are specced in `web/CONTEXT.md` but not built.
+- Coach + OKR modes are built in **`web-static/` only**; the Next.js `web/` app still
+  has just the critique route (parity is a nice-to-have, not required).
 - Benchmark is an honest synthetic baseline; wire a server-side store to make it a
   real running average once decks flow through.
+- The wiki grows by human-reviewed publish; there's no auto-write on purpose.
