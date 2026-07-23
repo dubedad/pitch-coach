@@ -87,7 +87,7 @@
       </div>
       <div class="row">
         <button class="primary" id="go" disabled>Get the cold read</button>
-        <span class="hint">One investor-grade pass. ~15–30 seconds.</span>
+        <span class="hint">One investor-grade pass. Takes about 1–2 minutes — keep this tab open.</span>
       </div>
       <div class="error" id="error" style="display:none"></div>
     </section>
@@ -122,7 +122,7 @@
 
     go.onclick=async()=>{
       errorEl.style.display="none"; $("results").innerHTML="";
-      go.disabled=true; go.innerHTML='<span class="spinner"></span>Reading your deck…';
+      go.disabled=true; go.innerHTML='<span class="spinner"></span>Reading your deck… (~1–2 min)';
       try{
         const form=new FormData();
         if(mode==="upload"&&file) form.append("deck",file); else form.append("text",$("text").value);
