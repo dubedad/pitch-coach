@@ -121,7 +121,7 @@ function build_system_prompt(): string {
     $examples = read_editor("examples.md");
 
     $refNames = ["value-proposition-recipe.md", "deck-structure.md", "opportunity-screening.md",
-                 "red-flags.md", "investor-signals.md", "founder-archetypes.md"];
+                 "red-flags.md", "investor-signals.md", "founder-archetypes.md", "theory-of-change.md"];
     $refs = "";
     foreach ($refNames as $r) {
         $body = read_editor("reference/" . $r);
@@ -145,8 +145,14 @@ exemplars, never the founder's rewritten copy. mitigation_question hands the gap
 back. You are critiquing and teaching — you never write the founder's slides.
 
 Do NOT emit numeric scores or bands — the runtime computes those from your criteria
-verdicts. For every criterion, judge "met", "partial", or "missing" and quote or
-reference the deck in "evidence".
+verdicts. For every criterion, judge "met", "partial", "missing", or "not_applicable"
+and quote or reference the deck in "evidence".
+
+Use "not_applicable" ONLY when a criterion genuinely does not apply at this deck's
+stage — e.g. a pre-seed deck with no operating history isn't expected to show
+financial projections; a traction-led deck may not need a formal "why now" slide.
+N/A criteria drop out of the score entirely rather than dragging it down. Do NOT use
+N/A to excuse a gap that SHOULD be closed — that's a "missing", and you should name it.
 
 The JSON shape:
 {
@@ -156,7 +162,7 @@ The JSON shape:
   },
   "factors": [
     { "id": "<factor id>",
-      "criteria": [ { "name": "<criterion text verbatim>", "verdict": "met|partial|missing", "evidence": "quote/reference" } ],
+      "criteria": [ { "name": "<criterion text verbatim>", "verdict": "met|partial|missing|not_applicable", "evidence": "quote/reference" } ],
       "investor_read": "...", "why_it_matters": "...", "cost_if_ignored": "...",
       "do_pattern": "generic exemplar (NOT the founder's copy)", "dont_pattern": "generic failure exemplar",
       "mitigation_question": "the question that hands the gap back" }
@@ -232,21 +238,47 @@ function band_for(float $s): string {
 }
 
 function score(array $raw): array {
+    // not_applicable is deliberately absent: N/A criteria are excluded, not scored 0.
     $verdictVal = ["met" => 1.0, "partial" => 0.5, "missing" => 0.0];
     $byId = [];
     foreach ($raw["factors"] ?? [] as $f) $byId[$f["id"] ?? ""] = $f;
 
     $factors = [];
-    $composite = 0.0;
+    $weightedSum = 0.0;
+    $includedWeight = 0.0;
     foreach (factors() as $def) {
         $rf = $byId[$def["id"]] ?? [];
         $crit = $rf["criteria"] ?? [];
+        // Score only over criteria that actually apply (drop not_applicable).
+        $scorable = 0;
         $sum = 0.0;
-        foreach ($crit as $c) $sum += $verdictVal[$c["verdict"] ?? "missing"] ?? 0.0;
-        $sc = count($crit) ? round($sum / count($crit), 2) : 0.0;
-        $composite += $sc * $def["weight"];
+        foreach ($crit as $c) {
+            $v = $c["verdict"] ?? "missing";
+            if (!array_key_exists($v, $verdictVal)) continue; // not_applicable / unknown
+            $sum += $verdictVal[$v];
+            $scorable++;
+        }
+        if ($scorable === 0) {
+            // Every criterion is N/A (or none present): this factor drops out of the math.
+            $factors[] = [
+                "id" => $def["id"], "label" => $def["label"],
+                "score" => null, "band" => "not_applicable", "na" => true,
+                "criteria" => $crit,
+                "investor_read" => $rf["investor_read"] ?? "",
+                "why_it_matters" => $rf["why_it_matters"] ?? "",
+                "cost_if_ignored" => $rf["cost_if_ignored"] ?? "",
+                "do_pattern" => $rf["do_pattern"] ?? "",
+                "dont_pattern" => $rf["dont_pattern"] ?? "",
+                "mitigation_question" => $rf["mitigation_question"] ?? "",
+            ];
+            continue;
+        }
+        $sc = round($sum / $scorable, 2);
+        $weightedSum += $sc * $def["weight"];
+        $includedWeight += $def["weight"];
         $factors[] = [
             "id" => $def["id"], "label" => $def["label"], "score" => $sc, "band" => band_for($sc),
+            "na" => false,
             "criteria" => $crit,
             "investor_read" => $rf["investor_read"] ?? "",
             "why_it_matters" => $rf["why_it_matters"] ?? "",
@@ -257,9 +289,12 @@ function score(array $raw): array {
         ];
     }
 
+    // Composite = weighted average over INCLUDED factors only (renormalized).
+    $composite = $includedWeight > 0 ? round($weightedSum / $includedWeight, 2) : 0.0;
+
     return [
         "overall" => [
-            "composite_score" => round($composite, 2),
+            "composite_score" => $composite,
             "cold_read_verdict" => $raw["overall"]["cold_read_verdict"] ?? "",
             "top_3_dealkillers" => array_slice($raw["overall"]["top_3_dealkillers"] ?? [], 0, 3),
         ],

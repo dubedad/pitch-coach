@@ -61,6 +61,7 @@
     .pill.met{background:rgba(34,197,94,.15);color:#86efac}
     .pill.partial{background:rgba(245,158,11,.15);color:#fcd34d}
     .pill.missing{background:rgba(239,68,68,.15);color:#fca5a5}
+    .pill.not_applicable{background:rgba(147,160,180,.15);color:var(--muted)}
     .ev{color:var(--muted);font-style:italic}
     .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(6,16,31,.4);border-top-color:#06101f;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
     @keyframes spin{to{transform:rotate(360deg)}}
@@ -162,9 +163,10 @@
       {id:"team_fit",label:"Team & Founder–Market Fit"},
       {id:"risk_reward_ask",label:"Risk / Reward & Ask"},
     ];
-    const BAND_COLOR={missing_or_fatal:"var(--fatal)",present_but_broken:"var(--broken)",adequate:"var(--adequate)",strong:"var(--strong)",exceptional:"var(--exceptional)"};
+    const BAND_COLOR={missing_or_fatal:"var(--fatal)",present_but_broken:"var(--broken)",adequate:"var(--adequate)",strong:"var(--strong)",exceptional:"var(--exceptional)",not_applicable:"var(--muted)"};
     const pct=n=>Math.round(n*100);
-    const bandLabel=b=>b.replace(/_/g," ");
+    const isNA=f=>f&&(f.na===true||f.score===null||f.score===undefined);
+    const bandLabel=b=>(b||"").replace(/_/g," ");
     const $=id=>document.getElementById(id);
     const esc=s=>{const d=document.createElement("div");d.textContent=s??"";return d.innerHTML;};
 
@@ -213,16 +215,19 @@
       if(o.top_3_dealkillers?.length){ html+=`<h2>Top deal-killers</h2>`;
         o.top_3_dealkillers.forEach((k,i)=>{html+=`<div class="killer"><span class="num">${i+1}</span><div><div>${esc(k.one_line)}</div><span class="tag">${esc((k.factor_id||"").replace(/_/g," "))}</span></div></div>`;});}
       html+=`<h2>Every factor — click a dial to open the full note</h2><div class="grid">`;
-      c.factors.forEach((f,idx)=>{const color=BAND_COLOR[f.band];const tgt=okr.targets[f.id];
-        html+=`<button class="dial" data-i="${idx}"><div class="label">${esc(f.label)}</div><div class="score" style="color:${color}">${pct(f.score)}</div><div class="meter"><span style="width:${pct(f.score)}%;background:${color}"></span>${tgt!==undefined?`<span class="target" style="left:${pct(tgt)}%"></span>`:""}</div><div class="band">${bandLabel(f.band)}${tgt!==undefined?` · target ${pct(tgt)}`:""}</div></button>`;});
+      c.factors.forEach((f,idx)=>{const color=BAND_COLOR[f.band]||"var(--muted)";const tgt=okr.targets[f.id];const na=isNA(f);
+        const scoreCell=na?`<div class="score" style="color:var(--muted)">N/A</div>`:`<div class="score" style="color:${color}">${pct(f.score)}</div>`;
+        const meterFill=na?"":`<span style="width:${pct(f.score)}%;background:${color}"></span>`;
+        const bandTxt=na?"not applicable at this stage":`${bandLabel(f.band)}${tgt!==undefined?` · target ${pct(tgt)}`:""}`;
+        html+=`<button class="dial" data-i="${idx}"><div class="label">${esc(f.label)}</div>${scoreCell}<div class="meter">${meterFill}${(!na&&tgt!==undefined)?`<span class="target" style="left:${pct(tgt)}%"></span>`:""}</div><div class="band">${bandTxt}</div></button>`;});
       html+=`</div>`;
       $("results").innerHTML=html;
       document.querySelectorAll("#results .dial").forEach(b=>b.onclick=()=>openDrawer(c.factors[+b.dataset.i]));
     }
 
-    function openDrawer(f){const color=BAND_COLOR[f.band];let crit="";
+    function openDrawer(f){const color=BAND_COLOR[f.band]||"var(--muted)";const na=isNA(f);let crit="";
       (f.criteria||[]).forEach(c=>{crit+=`<div class="crit"><span class="pill ${c.verdict}">${esc(c.verdict)}</span><div><div>${esc(c.name)}</div>${c.evidence?`<div class="ev">${esc(c.evidence)}</div>`:""}</div></div>`;});
-      $("drawerRoot").innerHTML=`<div class="overlay" id="ov"><aside class="drawer"><button class="close" id="cl">Close</button><h3>${esc(f.label)}</h3><div class="band" style="color:${color}">${pct(f.score)} / 100 · ${bandLabel(f.band)}</div>
+      $("drawerRoot").innerHTML=`<div class="overlay" id="ov"><aside class="drawer"><button class="close" id="cl">Close</button><h3>${esc(f.label)}</h3><div class="band" style="color:${color}">${na?"N/A · not applicable at this stage":`${pct(f.score)} / 100 · ${bandLabel(f.band)}`}</div>
         ${f.investor_read?`<div class="section"><h4>What an investor concludes</h4><p>${esc(f.investor_read)}</p></div>`:""}
         ${f.why_it_matters?`<div class="section"><h4>Why fixing it earns the meeting</h4><p>${esc(f.why_it_matters)}</p></div>`:""}
         ${f.cost_if_ignored?`<div class="section"><h4>Cost if ignored</h4><p>${esc(f.cost_if_ignored)}</p></div>`:""}
@@ -267,9 +272,9 @@
     function renderGoals(){
       $("objective").value=okr.objective||"";
       let html="";
-      FACTORS.forEach(f=>{const tgt=okr.targets[f.id]??0.7;const cur=scores[f.id];
-        html+=`<div class="goal"><div class="top"><span>${esc(f.label)}</span><span class="hint">${cur!==undefined?`now ${pct(cur)} · `:""}target <b id="tv-${f.id}">${pct(tgt)}</b></span></div>
-          <div class="meter" style="margin-bottom:8px">${cur!==undefined?`<span style="width:${pct(cur)}%;background:var(--accent)"></span>`:""}<span class="target" style="left:${pct(tgt)}%"></span></div>
+      FACTORS.forEach(f=>{const tgt=okr.targets[f.id]??0.7;const cur=scores[f.id];const has=cur!=null;
+        html+=`<div class="goal"><div class="top"><span>${esc(f.label)}</span><span class="hint">${has?`now ${pct(cur)} · `:""}target <b id="tv-${f.id}">${pct(tgt)}</b></span></div>
+          <div class="meter" style="margin-bottom:8px">${has?`<span style="width:${pct(cur)}%;background:var(--accent)"></span>`:""}<span class="target" style="left:${pct(tgt)}%"></span></div>
           <input type="range" min="0" max="100" value="${pct(tgt)}" data-f="${f.id}"></div>`;});
       $("goalsList").innerHTML=html;
       document.querySelectorAll('#goalsList input[type=range]').forEach(r=>r.oninput=()=>{

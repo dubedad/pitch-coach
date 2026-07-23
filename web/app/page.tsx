@@ -11,6 +11,7 @@ const BAND_COLOR: Record<Band, string> = {
   adequate: "var(--adequate)",
   strong: "var(--strong)",
   exceptional: "var(--exceptional)",
+  not_applicable: "var(--muted)",
 };
 
 function pct(n: number): string {
@@ -202,18 +203,23 @@ function Results({
           {factors.map((f) => {
             const color = BAND_COLOR[f.band];
             const bench = benchmark?.[f.id];
+            const na = f.na || f.score === null;
             return (
               <button className="dial" key={f.id} onClick={() => onOpen(f)}>
                 <div className="label">{f.label}</div>
                 <div className="score" style={{ color }}>
-                  {pct(f.score)}
+                  {na ? "N/A" : pct(f.score as number)}
                 </div>
                 <div className="meter">
-                  <span
-                    style={{ width: `${pct(f.score)}%`, background: color }}
-                  />
+                  {!na && (
+                    <span
+                      style={{ width: `${pct(f.score as number)}%`, background: color }}
+                    />
+                  )}
                 </div>
-                <div className="band">{bandLabel(f.band)}</div>
+                <div className="band">
+                  {na ? "not applicable at this stage" : bandLabel(f.band)}
+                </div>
                 {bench !== undefined && (
                   <div className="bench">
                     benchmark {pct(bench)} · updating as more decks are scored
@@ -243,7 +249,9 @@ function FactorDrawer({
         </button>
         <h3>{factor.label}</h3>
         <div className="band" style={{ color: BAND_COLOR[factor.band] }}>
-          {pct(factor.score)} / 100 · {bandLabel(factor.band)}
+          {factor.na || factor.score === null
+            ? "N/A · not applicable at this stage"
+            : `${pct(factor.score)} / 100 · ${bandLabel(factor.band)}`}
         </div>
 
         {factor.investor_read && (

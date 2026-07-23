@@ -8,10 +8,11 @@ import {
   Verdict,
 } from "./schema";
 
-const VERDICT_VALUE: Record<Verdict, number> = {
+const VERDICT_VALUE: Record<string, number> = {
   met: 1,
   partial: 0.5,
   missing: 0,
+  // not_applicable is intentionally absent: N/A criteria are excluded, not scored 0.
 };
 
 export function bandFor(score: number): Band {
@@ -26,17 +27,23 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/** Factor score = mean of its criteria verdicts (equal weight). */
-function scoreFactor(criteria: { verdict: Verdict }[]): number {
-  if (criteria.length === 0) return 0;
-  const total = criteria.reduce((sum, c) => sum + (VERDICT_VALUE[c.verdict] ?? 0), 0);
-  return round2(total / criteria.length);
+/**
+ * Factor score = mean of its criteria verdicts (equal weight), counting only the
+ * criteria that actually apply. Returns null when every criterion is not_applicable
+ * (the whole factor drops out of the composite). See scoring-rubric.md.
+ */
+function scoreFactor(criteria: { verdict: Verdict }[]): number | null {
+  const scorable = criteria.filter((c) => c.verdict in VERDICT_VALUE);
+  if (scorable.length === 0) return null;
+  const total = scorable.reduce((sum, c) => sum + VERDICT_VALUE[c.verdict], 0);
+  return round2(total / scorable.length);
 }
 
 /**
  * Take the model's raw critique (criteria verdicts + prose) and compute every
  * score and band deterministically, plus the weighted composite. The model never
- * emits a float; this is the 30% arithmetic layer.
+ * emits a float; this is the 30% arithmetic layer. Factors whose criteria are all
+ * not_applicable are excluded and the remaining weights are renormalized.
  */
 export function scoreCritique(raw: Critique): Critique {
   const factorsById = new Map<FactorId, FactorResult>();
@@ -49,11 +56,13 @@ export function scoreCritique(raw: Critique): Critique {
     const rawFactor = factorsById.get(def.id);
     const criteria = rawFactor?.criteria ?? [];
     const score = scoreFactor(criteria);
+    const na = score === null;
     return {
       id: def.id,
       label: def.label,
       score,
-      band: bandFor(score),
+      band: na ? "not_applicable" : bandFor(score as number),
+      na,
       criteria,
       investor_read: rawFactor?.investor_read ?? "",
       why_it_matters: rawFactor?.why_it_matters ?? "",
@@ -64,9 +73,15 @@ export function scoreCritique(raw: Critique): Critique {
     };
   });
 
-  const composite = round2(
-    factors.reduce((sum, f) => sum + f.score * FACTOR_BY_ID[f.id].weight, 0),
-  );
+  // Composite = weighted average over INCLUDED (non-N/A) factors, renormalized.
+  let weightedSum = 0;
+  let includedWeight = 0;
+  for (const f of factors) {
+    if (f.na || f.score === null) continue;
+    weightedSum += f.score * FACTOR_BY_ID[f.id].weight;
+    includedWeight += FACTOR_BY_ID[f.id].weight;
+  }
+  const composite = includedWeight > 0 ? round2(weightedSum / includedWeight) : 0;
 
   return {
     overall: {

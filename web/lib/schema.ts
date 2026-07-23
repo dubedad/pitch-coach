@@ -2,14 +2,15 @@
 // configured. Mirrors web/scoring-rubric.md and web/output-schema.md.
 // Factor ids are STABLE keys used by both the model output and the renderer.
 
-export type Verdict = "met" | "partial" | "missing";
+export type Verdict = "met" | "partial" | "missing" | "not_applicable";
 
 export type Band =
   | "missing_or_fatal"
   | "present_but_broken"
   | "adequate"
   | "strong"
-  | "exceptional";
+  | "exceptional"
+  | "not_applicable";
 
 export type FactorId =
   | "value_proposition"
@@ -129,8 +130,9 @@ export interface CriterionResult {
 export interface FactorResult {
   id: FactorId;
   label: string;
-  score: number; // filled by runtime, not the model
+  score: number | null; // filled by runtime; null when the whole factor is N/A at this stage
   band: Band; // filled by runtime
+  na: boolean; // true when every criterion was not_applicable
   criteria: CriterionResult[];
   investor_read: string;
   why_it_matters: string;
