@@ -1,0 +1,25 @@
+{
+  "name": "pitch-coach-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web runtime for the pre-seed pitch-deck editor — renders the critique as an interactive dashboard. Consumes ../editor as its single source of truth.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "jszip": "^3.10.1",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "typescript": "^5.7.3"
+  }
+}
