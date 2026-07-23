@@ -135,7 +135,7 @@ function callClaude(system, deck) {
     const key = anthropicKey();
     if (!key) return reject({ code: 503, msg: "The critique model isn't configured. Set ANTHROPIC_API_KEY on the server." });
     const payload = JSON.stringify({
-      model: MODEL, max_tokens: 8192, system,
+      model: MODEL, max_tokens: 16000, system,
       messages: [{ role: 'user', content: 'Review this pitch deck and return the JSON critique described in your instructions.\n\n' + deck }],
     });
     const req = https.request('https://api.anthropic.com/v1/messages', {
@@ -154,11 +154,24 @@ function callClaude(system, deck) {
         let parsed; try { parsed = JSON.parse(body); } catch { return reject({ code: 502, msg: 'Model returned malformed response.' }); }
         let text = '';
         for (const block of (parsed.content || [])) if (block.type === 'text') text += block.text;
+        const stop = parsed.stop_reason;
         const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
         if (fence) text = fence[1];
         const start = text.indexOf('{'), end = text.lastIndexOf('}');
-        if (start === -1 || end === -1) return reject({ code: 502, msg: 'Model did not return JSON.' });
-        let obj; try { obj = JSON.parse(text.slice(start, end + 1)); } catch { return reject({ code: 502, msg: 'Model returned malformed JSON.' }); }
+        let obj = null;
+        if (start !== -1 && end !== -1 && end > start) {
+          try { obj = JSON.parse(text.slice(start, end + 1)); } catch { obj = null; }
+        }
+        if (!obj) {
+          // Diagnostics: capture the raw failing output so the cause is inspectable (never the key).
+          try {
+            fs.writeFileSync(path.join(EDITOR_DIR, '..', 'last-parse-failure.log'),
+              `ts=${new Date().toISOString()}\nstop_reason=${stop}\nusage=${JSON.stringify(parsed.usage || {})}\n`
+              + `text_length=${text.length}\n---HEAD(600)---\n${text.slice(0, 600)}\n---TAIL(1000)---\n${text.slice(-1000)}\n`);
+          } catch (_) {}
+          if (stop === 'max_tokens') return reject({ code: 502, msg: 'The critique ran past the length limit and got cut off. Trimming the deck and retrying usually fixes it.' });
+          return reject({ code: 502, msg: 'Model returned malformed JSON.' });
+        }
         resolve(obj);
       });
     });
