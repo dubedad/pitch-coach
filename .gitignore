@@ -8,3 +8,9 @@ pitch-coach-knowledge/
 # stray artifacts
 editor.zip
 pitch-coach-web-images/
+
+# Third-party clone of the competitor's editor — reference only, not ours to ship.
+pitch-deck-editor/
+
+# Local feedback/PR pack for nimarsagi's repo — scratch work, contributed via her repo.
+nimarsagi-feedback/
